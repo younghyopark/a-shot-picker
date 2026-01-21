@@ -201,7 +201,10 @@
                     <span id="ranking-pool">Candidates: 0</span>
                     <span id="target-display">Target: 25</span>
                 </div>
-                <button id="finish-ranking" class="secondary-btn">Finish & See Results</button>
+                <div class="header-actions">
+                    <button id="preview-top-btn" class="secondary-btn">🏆 Preview Top</button>
+                    <button id="finish-ranking" class="secondary-btn">Finish & See Results</button>
+                </div>
             </header>
 
             <div class="confidence-bar">
@@ -244,6 +247,18 @@
                 <!-- Selected photos will be shown here -->
             </div>
         </section>
+    </div>
+
+    <!-- Top Ranked Preview Modal -->
+    <div id="top-ranked-modal" class="modal hidden">
+        <div class="modal-content modal-large">
+            <button class="modal-close" id="top-ranked-close">×</button>
+            <h2>🏆 Current Top Ranked</h2>
+            <p class="modal-description">Based on comparisons so far. Rankings may change as you continue.</p>
+            <div class="top-ranked-grid" id="top-ranked-grid">
+                <!-- Top photos will be shown here -->
+            </div>
+        </div>
     </div>
 
     <!-- Import Selection Modal -->

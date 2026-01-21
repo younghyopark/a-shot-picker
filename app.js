@@ -156,7 +156,13 @@ const elements = {
     importModalClose: document.getElementById('import-modal-close'),
     importTextarea: document.getElementById('import-textarea'),
     importPreview: document.getElementById('import-preview'),
-    importConfirmBtn: document.getElementById('import-confirm-btn')
+    importConfirmBtn: document.getElementById('import-confirm-btn'),
+    
+    // Top ranked preview modal
+    previewTopBtn: document.getElementById('preview-top-btn'),
+    topRankedModal: document.getElementById('top-ranked-modal'),
+    topRankedClose: document.getElementById('top-ranked-close'),
+    topRankedGrid: document.getElementById('top-ranked-grid')
 };
 
 // ============================================
@@ -1545,6 +1551,41 @@ function confirmImport() {
 }
 
 // ============================================
+// Top Ranked Preview
+// ============================================
+
+async function openTopRankedPreview() {
+    // Sort candidates by Elo rating
+    const sorted = [...state.candidates].sort((a, b) => b.elo - a.elo);
+    const topN = sorted.slice(0, state.targetCount);
+    
+    // Preload thumbnails
+    await preloadThumbnails(topN);
+    
+    // Render the grid
+    elements.topRankedGrid.innerHTML = topN.map((photo, index) => `
+        <div class="top-ranked-photo" data-id="${photo.id}" title="${photo.name}">
+            <img src="${state.thumbnailCache.get(photo.id) || ''}" alt="${photo.name}">
+            <span class="rank-badge">#${index + 1}</span>
+            <span class="elo-badge">${Math.round(photo.elo)}</span>
+        </div>
+    `).join('');
+    
+    // Add click handlers for viewing full size
+    elements.topRankedGrid.querySelectorAll('.top-ranked-photo').forEach(el => {
+        el.addEventListener('click', () => {
+            openPhotoViewer(el.dataset.id);
+        });
+    });
+    
+    elements.topRankedModal.classList.remove('hidden');
+}
+
+function closeTopRankedPreview() {
+    elements.topRankedModal.classList.add('hidden');
+}
+
+// ============================================
 // Keyboard Shortcuts
 // ============================================
 
@@ -1619,6 +1660,13 @@ document.addEventListener('keydown', (e) => {
             closeImportModal();
         }
     }
+    
+    // Top ranked preview modal
+    if (!elements.topRankedModal.classList.contains('hidden')) {
+        if (e.key === 'Escape') {
+            closeTopRankedPreview();
+        }
+    }
 });
 
 // ============================================
@@ -1677,6 +1725,15 @@ elements.importModal.addEventListener('click', (e) => {
 });
 elements.importTextarea.addEventListener('input', updateImportPreview);
 elements.importConfirmBtn.addEventListener('click', confirmImport);
+
+// Top ranked preview modal
+elements.previewTopBtn.addEventListener('click', openTopRankedPreview);
+elements.topRankedClose.addEventListener('click', closeTopRankedPreview);
+elements.topRankedModal.addEventListener('click', (e) => {
+    if (e.target === elements.topRankedModal) {
+        closeTopRankedPreview();
+    }
+});
 
 // ============================================
 // Initialize
