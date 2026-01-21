@@ -358,21 +358,57 @@ function updateEloTie(photoA, photoB) {
     photoB.comparisons = (photoB.comparisons || 0) + 1;
 }
 
-// Swiss-system: pair photos with similar ratings
+// Swiss-system: pair photos with similar ratings, ensuring uniform coverage
 function getNextPair() {
     if (state.candidates.length < 2) return null;
     
-    // Sort by Elo rating
-    const sorted = [...state.candidates].sort((a, b) => b.elo - a.elo);
+    // Prioritize photos with fewer comparisons for uniform coverage
+    const sortedByComparisons = [...state.candidates].sort((a, b) => {
+        // First priority: fewer comparisons
+        const compDiff = (a.comparisons || 0) - (b.comparisons || 0);
+        if (compDiff !== 0) return compDiff;
+        // Second priority: similar Elo rating
+        return b.elo - a.elo;
+    });
     
-    // Find pair that hasn't been compared recently
-    // Prefer pairing adjacent-rated photos (Swiss system)
-    for (let i = 0; i < sorted.length - 1; i++) {
-        const a = sorted[i];
-        const b = sorted[i + 1];
+    // Get the photos with the fewest comparisons
+    const minComparisons = sortedByComparisons[0].comparisons || 0;
+    const underCompared = sortedByComparisons.filter(p => (p.comparisons || 0) <= minComparisons + 1);
+    
+    // If we have enough under-compared photos, pick from them
+    if (underCompared.length >= 2) {
+        // Shuffle to avoid always picking the same ones
+        const shuffled = [...underCompared].sort(() => Math.random() - 0.5);
         
-        // Check if this pair was compared in recent history
-        const recentlyCompared = state.comparisonHistory.slice(-20).some(
+        // Find a pair that hasn't been compared recently
+        for (let i = 0; i < shuffled.length; i++) {
+            for (let j = i + 1; j < shuffled.length; j++) {
+                const a = shuffled[i];
+                const b = shuffled[j];
+                
+                const recentlyCompared = state.comparisonHistory.slice(-10).some(
+                    h => (h.a === a.id && h.b === b.id) || (h.a === b.id && h.b === a.id)
+                );
+                
+                if (!recentlyCompared) {
+                    return [a, b];
+                }
+            }
+        }
+    }
+    
+    // Fallback: sort by Elo and pair adjacent ratings (classic Swiss)
+    const sortedByElo = [...state.candidates].sort((a, b) => b.elo - a.elo);
+    
+    // Shuffle starting position to avoid always starting from top
+    const startOffset = Math.floor(Math.random() * (sortedByElo.length - 1));
+    
+    for (let i = 0; i < sortedByElo.length - 1; i++) {
+        const idx = (i + startOffset) % (sortedByElo.length - 1);
+        const a = sortedByElo[idx];
+        const b = sortedByElo[idx + 1];
+        
+        const recentlyCompared = state.comparisonHistory.slice(-15).some(
             h => (h.a === a.id && h.b === b.id) || (h.a === b.id && h.b === a.id)
         );
         
@@ -381,14 +417,9 @@ function getNextPair() {
         }
     }
     
-    // If all adjacent pairs were recently compared, pick random
-    const a = sorted[Math.floor(Math.random() * sorted.length)];
-    let b;
-    do {
-        b = sorted[Math.floor(Math.random() * sorted.length)];
-    } while (b.id === a.id);
-    
-    return [a, b];
+    // Last resort: random pair
+    const shuffledAll = [...state.candidates].sort(() => Math.random() - 0.5);
+    return [shuffledAll[0], shuffledAll[1]];
 }
 
 function calculateConfidence() {
