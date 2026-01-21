@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Photo Selection - A-Shot Picker</title>
+    <meta name="description" content="Select your best 20-30 photos from thousands using a smart tournament-style algorithm. Free, private, runs entirely in your browser.">
+    <meta name="theme-color" content="#6366f1">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <!-- Landing Screen -->
+        <section id="landing-screen" class="screen active">
+            <div class="hero">
+                <h1>📸 A-Shot Picker</h1>
+                <p class="subtitle">Select your best 20-30 photos from thousands using our smart tournament system</p>
+                
+                <div class="features">
+                    <div class="feature">
+                        <span class="icon">🗂️</span>
+                        <h3>Load Folder</h3>
+                        <p>Select your photoshoot folder with 5000+ photos</p>
+                    </div>
+                    <div class="feature">
+                        <span class="icon">⚔️</span>
+                        <h3>Tournament Mode</h3>
+                        <p>Compare photos head-to-head to find your favorites</p>
+                    </div>
+                    <div class="feature">
+                        <span class="icon">🏆</span>
+                        <h3>Get A-Shots</h3>
+                        <p>Export your curated selection of 20-30 best photos</p>
+                    </div>
+                </div>
+
+                <div class="settings-panel">
+                    <h3>Selection Settings</h3>
+                    <div class="setting-row">
+                        <label for="target-count">Target A-Shots:</label>
+                        <input type="number" id="target-count" min="10" max="100" value="25">
+                    </div>
+                    <div class="setting-row">
+                        <label for="shuffle-photos">Photo Order:</label>
+                        <select id="shuffle-photos">
+                            <option value="original">Original (by filename)</option>
+                            <option value="shuffle">Shuffled (random)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button id="select-folder-btn" class="primary-btn">
+                    <span>📁</span> Select Photo Folder
+                </button>
+                
+                <p class="browser-note">Works best in Chrome, Edge, or other Chromium browsers</p>
+            </div>
+        </section>
+
+        <!-- Loading Screen -->
+        <section id="loading-screen" class="screen">
+            <div class="loading-content">
+                <div class="spinner"></div>
+                <h2>Loading Photos...</h2>
+                <p id="loading-status">Scanning folder...</p>
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
+                <p id="progress-text">0 / 0</p>
+            </div>
+        </section>
+
+        <!-- Selection Screen (Click to pick candidates) -->
+        <section id="selection-screen" class="screen">
+            <header class="app-header">
+                <h2>📷 Pick Your Candidates</h2>
+                <div class="view-toggle">
+                    <button id="grid-view-btn" class="toggle-btn" title="Grid View">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <rect x="3" y="3" width="7" height="7" rx="1"/>
+                            <rect x="14" y="3" width="7" height="7" rx="1"/>
+                            <rect x="3" y="14" width="7" height="7" rx="1"/>
+                            <rect x="14" y="14" width="7" height="7" rx="1"/>
+                        </svg>
+                    </button>
+                    <button id="swipe-view-btn" class="toggle-btn active" title="Swipe View">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <rect x="2" y="4" width="20" height="16" rx="2"/>
+                            <path d="M7 12l3-3v6l-3-3z" fill="var(--bg-primary)"/>
+                            <path d="M17 12l-3-3v6l3-3z" fill="var(--bg-primary)"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="stats">
+                    <span id="selection-progress">Page 1 of 10</span>
+                    <span id="selection-count" class="highlight">0 selected</span>
+                </div>
+                <div class="header-actions">
+                    <button id="import-selection-btn" class="secondary-btn" title="Import photo numbers from a previous selection">📥 Import</button>
+                    <button id="view-selected-btn" class="secondary-btn" disabled>View Selected</button>
+                    <button id="proceed-to-ranking" class="primary-btn" disabled>Proceed to Ranking →</button>
+                </div>
+            </header>
+            
+            <p class="instruction hidden" id="grid-instruction">Click photos you might want to keep. Double-click to view full size.</p>
+            <p class="instruction" id="swipe-instruction">Use <kbd>←</kbd> <kbd>→</kbd> to navigate, <kbd>Space</kbd> to select/deselect, <kbd>Enter</kbd> to proceed</p>
+            
+            <div class="selection-layout">
+                <!-- Selection Sidebar -->
+                <aside class="selection-sidebar" id="selection-sidebar">
+                    <div class="sidebar-header">
+                        <h3>📋 Selected</h3>
+                        <span class="sidebar-count" id="sidebar-count">0</span>
+                    </div>
+                    <div class="sidebar-thumbnails" id="sidebar-thumbnails">
+                        <p class="sidebar-empty">No photos selected yet</p>
+                    </div>
+                    <div class="sidebar-actions">
+                        <button id="sidebar-clear" class="secondary-btn small" disabled>Clear All</button>
+                    </div>
+                </aside>
+                
+                <!-- Main Content -->
+                <div class="selection-main">
+                    <!-- Grid View -->
+                    <div class="selection-grid hidden" id="selection-grid">
+                        <!-- Photos will be inserted here -->
+                    </div>
+                    
+                    <!-- Swipe View -->
+                    <div class="swipe-view" id="swipe-view">
+                        <button class="swipe-nav swipe-prev" id="swipe-prev">‹</button>
+                        <div class="swipe-container">
+                            <div class="swipe-image-wrapper">
+                                <img id="swipe-image" src="" alt="">
+                                <div class="swipe-select-badge hidden" id="swipe-badge">✓ Selected</div>
+                            </div>
+                            <div class="swipe-info">
+                                <span id="swipe-filename">filename.jpg</span>
+                                <span id="swipe-counter">1 / 5000</span>
+                            </div>
+                        </div>
+                        <button class="swipe-nav swipe-next" id="swipe-next">›</button>
+                    </div>
+                    
+                    <div class="selection-controls hidden" id="grid-controls">
+                        <button id="selection-prev" class="control-btn" disabled>← Previous</button>
+                        <div class="page-indicator">
+                            <span id="current-page">1</span> / <span id="total-pages">1</span>
+                        </div>
+                        <button id="selection-next" class="control-btn">Next →</button>
+                    </div>
+                    
+                    <div class="selection-controls" id="swipe-controls">
+                        <button id="swipe-select-btn" class="control-btn">Select Photo <kbd>Space</kbd></button>
+                        <div class="swipe-progress">
+                            <div class="swipe-progress-bar">
+                                <div id="swipe-progress-fill" class="swipe-progress-fill"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- View Selected Screen -->
+        <section id="selected-review-screen" class="screen">
+            <header class="app-header">
+                <h2>📋 Your Candidates</h2>
+                <div class="stats">
+                    <span id="review-count">0 photos</span>
+                </div>
+                <div class="header-actions">
+                    <button id="back-to-selection" class="secondary-btn">← Back to Selection</button>
+                    <button id="start-ranking" class="primary-btn">Start Ranking →</button>
+                </div>
+            </header>
+            
+            <p class="instruction">Review your candidates. Click to remove any you've changed your mind about.</p>
+            
+            <div class="review-grid" id="review-grid">
+                <!-- Selected photos will be shown here -->
+            </div>
+        </section>
+
+        <!-- Ranking Screen (Swiss-system comparisons) -->
+        <section id="ranking-screen" class="screen">
+            <header class="app-header">
+                <div class="ranking-info">
+                    <h2>⚖️ Compare & Rank</h2>
+                    <div class="round-progress">
+                        <span id="comparison-progress">Comparison 1 of 50</span>
+                    </div>
+                </div>
+                <div class="stats">
+                    <span id="ranking-pool">Candidates: 0</span>
+                    <span id="target-display">Target: 25</span>
+                </div>
+                <button id="finish-ranking" class="secondary-btn">Finish & See Results</button>
+            </header>
+
+            <div class="confidence-bar">
+                <div class="confidence-label">Ranking Confidence:</div>
+                <div class="confidence-track">
+                    <div id="confidence-fill" class="confidence-fill"></div>
+                </div>
+                <span id="confidence-percent">0%</span>
+            </div>
+
+            <p class="instruction">Which photo(s) do you prefer? Click to select, then confirm. Press <kbd>S</kbd> to skip if they're equal.</p>
+            
+            <div class="ranking-arena" id="ranking-arena">
+                <!-- Photos will be inserted here -->
+            </div>
+
+            <div class="ranking-controls">
+                <button id="skip-comparison" class="control-btn">Skip (Equal) <kbd>S</kbd></button>
+                <button id="undo-comparison" class="control-btn" disabled>↩ Undo</button>
+                <button id="confirm-ranking" class="primary-btn" disabled>Confirm Selection</button>
+            </div>
+        </section>
+
+        <!-- Results Screen -->
+        <section id="results-screen" class="screen">
+            <header class="app-header">
+                <h2>🏆 Your A-Shots</h2>
+                <div class="stats">
+                    <span id="final-count">25 photos selected</span>
+                </div>
+            </header>
+
+            <div class="results-actions">
+                <button id="copy-filenames" class="secondary-btn">📋 Copy Filenames</button>
+                <button id="download-list" class="secondary-btn">📄 Download List</button>
+                <button id="start-over" class="secondary-btn">🔄 Start Over</button>
+            </div>
+
+            <div class="results-grid" id="results-grid">
+                <!-- Selected photos will be shown here -->
+            </div>
+        </section>
+    </div>
+
+    <!-- Import Selection Modal -->
+    <div id="import-modal" class="modal hidden">
+        <div class="modal-content">
+            <button class="modal-close" id="import-modal-close">×</button>
+            <h2>📥 Import Selection</h2>
+            <p class="modal-description">Paste your photo numbers below. Any format works - numbers separated by spaces, commas, slashes, line breaks, etc.</p>
+            <textarea id="import-textarea" placeholder="Example:
+391
+464 498 522
+569/605/594
+1647, 1650, 1668
+..."></textarea>
+            <div class="modal-footer">
+                <span id="import-preview">0 numbers detected</span>
+                <button id="import-confirm-btn" class="primary-btn">Import Selection</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Full-screen photo viewer -->
+    <div id="photo-viewer" class="photo-viewer hidden">
+        <button class="close-viewer">×</button>
+        <img id="viewer-image" src="" alt="Full size photo">
+        <div class="viewer-info">
+            <span id="viewer-filename"></span>
+        </div>
+    </div>
+
+    <script src="app.js" type="module"></script>
+</body>
+</html>
