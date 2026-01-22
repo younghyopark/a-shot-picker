@@ -34,8 +34,14 @@ const state = {
     currentPage: 0,
     photosPerPage: 60,
     selectedIds: new Set(),
-    viewMode: 'swipe', // 'grid' or 'swipe'
+    viewMode: 'swipe', // 'grid', 'swipe', or 'cluster'
     swipeIndex: 0, // Current photo index in swipe mode
+    
+    // Clustering state
+    clusters: [], // Array of clusters, each is array of photo objects
+    clusterFingerprints: new Map(), // Photo ID -> fingerprint data
+    clusterThreshold: 15, // Similarity threshold (lower = more similar required)
+    expandedClusters: new Set(), // Track which clusters are expanded
     
     // Phase 2: Ranking state
     comparisonHistory: [], // For undo
@@ -97,10 +103,15 @@ const elements = {
     proceedToRanking: document.getElementById('proceed-to-ranking'),
     gridViewBtn: document.getElementById('grid-view-btn'),
     swipeViewBtn: document.getElementById('swipe-view-btn'),
+    clusterViewBtn: document.getElementById('cluster-view-btn'),
     gridInstruction: document.getElementById('grid-instruction'),
     swipeInstruction: document.getElementById('swipe-instruction'),
+    clusterInstruction: document.getElementById('cluster-instruction'),
     gridControls: document.getElementById('grid-controls'),
     swipeControls: document.getElementById('swipe-controls'),
+    clusterView: document.getElementById('cluster-view'),
+    clusterThresholdSlider: document.getElementById('cluster-threshold'),
+    clusterCountDisplay: document.getElementById('cluster-count'),
     
     // Swipe view
     swipeView: document.getElementById('swipe-view'),
@@ -815,6 +826,10 @@ async function startSelectionPhase(keepSelections = false) {
     if (!keepSelections) {
         state.selectedIds.clear();
         state.swipeIndex = 0;
+        // Clear cluster data for fresh start
+        state.clusters = [];
+        state.clusterFingerprints.clear();
+        state.expandedClusters.clear();
     }
     
     const totalPages = Math.ceil(state.allPhotos.length / state.photosPerPage);
@@ -823,12 +838,15 @@ async function startSelectionPhase(keepSelections = false) {
     // Reset view mode UI - default to swipe
     elements.gridViewBtn.classList.remove('active');
     elements.swipeViewBtn.classList.add('active');
+    elements.clusterViewBtn.classList.remove('active');
     elements.selectionGrid.classList.add('hidden');
     elements.swipeView.classList.remove('hidden');
+    elements.clusterView.classList.add('hidden');
     elements.gridControls.classList.add('hidden');
     elements.swipeControls.classList.remove('hidden');
     elements.gridInstruction.classList.add('hidden');
     elements.swipeInstruction.classList.remove('hidden');
+    elements.clusterInstruction.classList.add('hidden');
     
     showScreen('selection-screen');
     await renderSwipeView();
@@ -1094,23 +1112,399 @@ function setViewMode(mode) {
     // Update toggle buttons
     elements.gridViewBtn.classList.toggle('active', mode === 'grid');
     elements.swipeViewBtn.classList.toggle('active', mode === 'swipe');
+    elements.clusterViewBtn.classList.toggle('active', mode === 'cluster');
     
     // Show/hide appropriate views
     elements.selectionGrid.classList.toggle('hidden', mode !== 'grid');
     elements.swipeView.classList.toggle('hidden', mode !== 'swipe');
+    elements.clusterView.classList.toggle('hidden', mode !== 'cluster');
     elements.gridControls.classList.toggle('hidden', mode !== 'grid');
     elements.swipeControls.classList.toggle('hidden', mode !== 'swipe');
     elements.gridInstruction.classList.toggle('hidden', mode !== 'grid');
     elements.swipeInstruction.classList.toggle('hidden', mode !== 'swipe');
+    elements.clusterInstruction.classList.toggle('hidden', mode !== 'cluster');
     
-    // Update progress display for swipe mode
+    // Update progress display based on mode
     if (mode === 'swipe') {
         elements.selectionProgress.textContent = `${state.swipeIndex + 1} of ${state.allPhotos.length}`;
         renderSwipeView();
+    } else if (mode === 'cluster') {
+        elements.selectionProgress.textContent = `${state.clusters.length} clusters`;
+        renderClusterView();
     } else {
         elements.selectionProgress.textContent = `Page ${state.currentPage + 1} of ${elements.totalPages.textContent}`;
         renderSelectionPage();
     }
+}
+
+// ============================================
+// Clustering - Image Fingerprinting & Grouping
+// ============================================
+
+// Create a fingerprint from an image by downsampling to a small grid
+async function createFingerprint(photo, size = 8) {
+    if (state.clusterFingerprints.has(photo.id)) {
+        return state.clusterFingerprints.get(photo.id);
+    }
+    
+    try {
+        const file = await photo.handle.getFile();
+        const fingerprint = await computeImageFingerprint(file, size);
+        state.clusterFingerprints.set(photo.id, fingerprint);
+        return fingerprint;
+    } catch (err) {
+        console.warn(`Failed to create fingerprint for ${photo.name}:`, err);
+        return null;
+    }
+}
+
+// Reusable canvas for fingerprinting (memory optimization)
+let fingerprintCanvas = null;
+let fingerprintCtx = null;
+
+// Compute fingerprint from a File object - memory optimized
+function computeImageFingerprint(file, size = 8) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        
+        img.onload = () => {
+            // Reuse canvas to avoid memory leaks
+            if (!fingerprintCanvas) {
+                fingerprintCanvas = document.createElement('canvas');
+                fingerprintCanvas.width = size;
+                fingerprintCanvas.height = size;
+                fingerprintCtx = fingerprintCanvas.getContext('2d', { willReadFrequently: true });
+            }
+            
+            // Clear and draw
+            fingerprintCtx.clearRect(0, 0, size, size);
+            fingerprintCtx.drawImage(img, 0, 0, size, size);
+            
+            const imageData = fingerprintCtx.getImageData(0, 0, size, size);
+            const data = imageData.data;
+            
+            // Extract grayscale values (more compact, faster comparison)
+            const fingerprint = new Uint8Array(size * size);
+            for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+                // Grayscale: 0.299*R + 0.587*G + 0.114*B
+                fingerprint[j] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+            }
+            
+            // Clean up
+            URL.revokeObjectURL(url);
+            img.src = ''; // Help garbage collection
+            
+            resolve(fingerprint);
+        };
+        
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            img.src = '';
+            reject(new Error('Failed to load image'));
+        };
+        
+        img.src = url;
+    });
+}
+
+// Calculate similarity distance between two fingerprints (lower = more similar)
+function fingerprintDistance(fp1, fp2) {
+    if (!fp1 || !fp2 || fp1.length !== fp2.length) {
+        return Infinity;
+    }
+    
+    let sum = 0;
+    for (let i = 0; i < fp1.length; i++) {
+        const diff = fp1[i] - fp2[i];
+        sum += diff * diff;
+    }
+    
+    // Return RMS difference (0-255 scale)
+    return Math.sqrt(sum / fp1.length);
+}
+
+// Format seconds into human-readable time
+function formatETA(seconds) {
+    if (seconds < 60) {
+        return `${Math.round(seconds)}s`;
+    } else if (seconds < 3600) {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.round(seconds % 60);
+        return `${mins}m ${secs}s`;
+    } else {
+        const hours = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+        return `${hours}h ${mins}m`;
+    }
+}
+
+// Request notification permission
+async function requestNotificationPermission() {
+    if (!('Notification' in window)) {
+        return false;
+    }
+    
+    if (Notification.permission === 'granted') {
+        return true;
+    }
+    
+    if (Notification.permission !== 'denied') {
+        const permission = await Notification.requestPermission();
+        return permission === 'granted';
+    }
+    
+    return false;
+}
+
+// Send browser notification
+function sendNotification(title, body) {
+    if (Notification.permission === 'granted') {
+        const notification = new Notification(title, {
+            body: body,
+            icon: 'favicon.svg',
+            tag: 'ashot-picker'
+        });
+        
+        // Auto-close after 5 seconds
+        setTimeout(() => notification.close(), 5000);
+        
+        // Focus window when clicked
+        notification.onclick = () => {
+            window.focus();
+            notification.close();
+        };
+    }
+}
+
+// Build clusters from all photos based on sequential similarity
+async function buildClusters() {
+    const photos = state.allPhotos;
+    if (photos.length === 0) return;
+    
+    // Request notification permission upfront
+    await requestNotificationPermission();
+    
+    elements.loadingStatus.textContent = 'Analyzing photos for clustering...';
+    elements.progressFill.style.width = '0%';
+    showScreen('loading-screen');
+    
+    // Build clusters incrementally - only keep current and previous fingerprint in memory
+    const clusters = [];
+    let currentCluster = [photos[0]];
+    let prevFp = await createFingerprint(photos[0]);
+    
+    const startTime = Date.now();
+    const BATCH_SIZE = 50; // Process in batches to allow GC
+    
+    for (let i = 1; i < photos.length; i++) {
+        const currFp = await createFingerprint(photos[i]);
+        const distance = fingerprintDistance(prevFp, currFp);
+        
+        if (distance <= state.clusterThreshold) {
+            // Similar to previous, add to current cluster
+            currentCluster.push(photos[i]);
+        } else {
+            // Different, start new cluster
+            clusters.push(currentCluster);
+            currentCluster = [photos[i]];
+        }
+        
+        // Move to next - only keep current fingerprint for next comparison
+        prevFp = currFp;
+        
+        // Update UI and allow GC every batch
+        if (i % BATCH_SIZE === 0 || i === photos.length - 1) {
+            const now = Date.now();
+            const elapsed = (now - startTime) / 1000;
+            const progress = ((i + 1) / photos.length) * 100;
+            const avgTimePerPhoto = elapsed / (i + 1);
+            const remaining = photos.length - (i + 1);
+            const etaSeconds = remaining * avgTimePerPhoto;
+            
+            elements.progressFill.style.width = `${progress}%`;
+            elements.progressText.textContent = `Processing ${i + 1} / ${photos.length} • ETA: ${formatETA(etaSeconds)}`;
+            
+            // Longer pause every batch for garbage collection
+            await new Promise(r => setTimeout(r, 10));
+        }
+    }
+    
+    // Don't forget the last cluster
+    if (currentCluster.length > 0) {
+        clusters.push(currentCluster);
+    }
+    
+    state.clusters = clusters;
+    state.expandedClusters.clear();
+    
+    // Clear the reusable canvas to free memory
+    fingerprintCanvas = null;
+    fingerprintCtx = null;
+    
+    console.log(`📊 Created ${clusters.length} clusters from ${photos.length} photos`);
+    
+    // Send browser notification
+    sendNotification(
+        '📊 Clustering Complete!',
+        `Created ${clusters.length} clusters from ${photos.length} photos`
+    );
+    
+    // Return to selection screen
+    showScreen('selection-screen');
+    
+    if (state.viewMode === 'cluster') {
+        renderClusterView();
+    }
+}
+
+// Re-cluster with new threshold
+async function recluster() {
+    const photos = state.allPhotos;
+    if (photos.length === 0) return;
+    
+    // Use cached fingerprints to rebuild clusters
+    const clusters = [];
+    let currentCluster = [photos[0]];
+    
+    for (let i = 1; i < photos.length; i++) {
+        const prevFp = state.clusterFingerprints.get(photos[i - 1].id);
+        const currFp = state.clusterFingerprints.get(photos[i].id);
+        const distance = fingerprintDistance(prevFp, currFp);
+        
+        if (distance <= state.clusterThreshold) {
+            currentCluster.push(photos[i]);
+        } else {
+            clusters.push(currentCluster);
+            currentCluster = [photos[i]];
+        }
+    }
+    
+    if (currentCluster.length > 0) {
+        clusters.push(currentCluster);
+    }
+    
+    state.clusters = clusters;
+    state.expandedClusters.clear();
+    
+    elements.clusterCountDisplay.textContent = `${clusters.length} clusters`;
+    elements.selectionProgress.textContent = `${clusters.length} clusters`;
+    
+    renderClusterView();
+}
+
+// Render the cluster view
+async function renderClusterView() {
+    if (state.clusters.length === 0) {
+        // Need to build clusters first
+        await buildClusters();
+        return;
+    }
+    
+    elements.clusterCountDisplay.textContent = `${state.clusters.length} clusters`;
+    
+    const container = elements.clusterView.querySelector('.cluster-container') || elements.clusterView;
+    
+    let html = '';
+    
+    for (let i = 0; i < state.clusters.length; i++) {
+        const cluster = state.clusters[i];
+        const isExpanded = state.expandedClusters.has(i);
+        const representativePhoto = cluster[0]; // First photo as representative
+        const selectedCount = cluster.filter(p => state.selectedIds.has(p.id)).length;
+        
+        html += `
+            <div class="cluster-group ${isExpanded ? 'expanded' : ''}" data-cluster-index="${i}">
+                <div class="cluster-header" data-cluster-index="${i}">
+                    <div class="cluster-preview">
+                        <img src="${state.thumbnailCache.get(representativePhoto.id) || ''}" 
+                             alt="${representativePhoto.name}" 
+                             data-photo-id="${representativePhoto.id}">
+                        ${cluster.length > 1 ? `<span class="cluster-stack-indicator">+${cluster.length - 1}</span>` : ''}
+                    </div>
+                    <div class="cluster-info">
+                        <span class="cluster-size">${cluster.length} photo${cluster.length > 1 ? 's' : ''}</span>
+                        ${selectedCount > 0 ? `<span class="cluster-selected">${selectedCount} selected</span>` : ''}
+                    </div>
+                    <button class="cluster-expand-btn">${isExpanded ? '▼' : '▶'}</button>
+                </div>
+                ${isExpanded ? `
+                    <div class="cluster-photos">
+                        ${cluster.map(photo => `
+                            <div class="cluster-photo ${state.selectedIds.has(photo.id) ? 'selected' : ''}" 
+                                 data-id="${photo.id}">
+                                <img src="${state.thumbnailCache.get(photo.id) || ''}" alt="${photo.name}">
+                                <span class="photo-name">${photo.name}</span>
+                                <span class="select-indicator">✓</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }
+    
+    container.innerHTML = html;
+    
+    // Load missing thumbnails
+    for (const cluster of state.clusters) {
+        for (const photo of cluster) {
+            if (!state.thumbnailCache.has(photo.id)) {
+                getThumbnail(photo).then(url => {
+                    const imgs = container.querySelectorAll(`[data-photo-id="${photo.id}"], [data-id="${photo.id}"] img`);
+                    imgs.forEach(img => {
+                        if (img.tagName === 'IMG' && url) img.src = url;
+                    });
+                });
+            }
+        }
+    }
+    
+    // Add event listeners
+    container.querySelectorAll('.cluster-header').forEach(header => {
+        header.addEventListener('click', (e) => {
+            if (e.target.classList.contains('cluster-expand-btn') || e.target === header) {
+                toggleClusterExpand(parseInt(header.dataset.clusterIndex));
+            }
+        });
+    });
+    
+    container.querySelectorAll('.cluster-photo').forEach(el => {
+        el.addEventListener('click', (e) => {
+            if (e.detail === 2) {
+                openPhotoViewer(el.dataset.id);
+            } else {
+                toggleSelectionInCluster(el.dataset.id);
+            }
+        });
+    });
+}
+
+function toggleClusterExpand(clusterIndex) {
+    if (state.expandedClusters.has(clusterIndex)) {
+        state.expandedClusters.delete(clusterIndex);
+    } else {
+        state.expandedClusters.add(clusterIndex);
+    }
+    renderClusterView();
+}
+
+function toggleSelectionInCluster(photoId) {
+    if (state.selectedIds.has(photoId)) {
+        state.selectedIds.delete(photoId);
+    } else {
+        state.selectedIds.add(photoId);
+    }
+    
+    // Update UI for this photo
+    const el = elements.clusterView.querySelector(`[data-id="${photoId}"]`);
+    if (el) {
+        el.classList.toggle('selected', state.selectedIds.has(photoId));
+    }
+    
+    updateSelectionStats();
+    renderClusterView(); // Re-render to update cluster selected counts
+    scheduleSave();
 }
 
 // ============================================
@@ -1483,6 +1877,9 @@ function startOver() {
     state.selectedIds.clear();
     state.thumbnailCache.clear();
     state.fullSizeCache.clear();
+    state.clusterFingerprints.clear();
+    state.clusters = [];
+    state.expandedClusters.clear();
     state.currentPhase = 'selection';
     
     showScreen('landing-screen');
@@ -1744,6 +2141,19 @@ elements.viewSelectedBtn.addEventListener('click', showSelectedReview);
 elements.proceedToRanking.addEventListener('click', startRankingPhase);
 elements.gridViewBtn.addEventListener('click', () => setViewMode('grid'));
 elements.swipeViewBtn.addEventListener('click', () => setViewMode('swipe'));
+elements.clusterViewBtn.addEventListener('click', () => setViewMode('cluster'));
+
+// Cluster view threshold slider
+elements.clusterThresholdSlider.addEventListener('input', (e) => {
+    state.clusterThreshold = parseInt(e.target.value);
+    document.getElementById('threshold-value').textContent = state.clusterThreshold;
+});
+elements.clusterThresholdSlider.addEventListener('change', () => {
+    // Re-cluster when slider is released
+    if (state.clusterFingerprints.size > 0) {
+        recluster();
+    }
+});
 
 // Swipe view
 elements.swipePrev.addEventListener('click', swipePrev);

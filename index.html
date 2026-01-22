@@ -95,6 +95,15 @@
                             <path d="M17 12l-3-3v6l3-3z" fill="var(--bg-primary)"/>
                         </svg>
                     </button>
+                    <button id="cluster-view-btn" class="toggle-btn" title="Cluster View - Group Similar Photos">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <circle cx="8" cy="8" r="3"/>
+                            <circle cx="16" cy="8" r="3"/>
+                            <circle cx="8" cy="16" r="3"/>
+                            <circle cx="16" cy="16" r="3"/>
+                            <path d="M8 11v2M16 11v2M11 8h2M11 16h2" stroke="currentColor" stroke-width="1.5" fill="none"/>
+                        </svg>
+                    </button>
                 </div>
                 <div class="stats">
                     <span id="selection-progress">Page 1 of 10</span>
@@ -109,6 +118,7 @@
             
             <p class="instruction hidden" id="grid-instruction">Click photos you might want to keep. Double-click to view full size.</p>
             <p class="instruction" id="swipe-instruction">Use <kbd>←</kbd> <kbd>→</kbd> to navigate, <kbd>Space</kbd> to select/deselect, <kbd>Enter</kbd> to proceed</p>
+            <p class="instruction hidden" id="cluster-instruction">Similar photos are grouped together. Click a cluster to expand and select photos.</p>
             
             <div class="selection-layout">
                 <!-- Selection Sidebar -->
@@ -146,6 +156,21 @@
                             </div>
                         </div>
                         <button class="swipe-nav swipe-next" id="swipe-next">›</button>
+                    </div>
+                    
+                    <!-- Cluster View -->
+                    <div class="cluster-view hidden" id="cluster-view">
+                        <div class="cluster-controls">
+                            <div class="cluster-threshold-control">
+                                <label for="cluster-threshold">Similarity:</label>
+                                <input type="range" id="cluster-threshold" min="5" max="50" value="15">
+                                <span id="threshold-value">15</span>
+                            </div>
+                            <span id="cluster-count" class="cluster-count">0 clusters</span>
+                        </div>
+                        <div class="cluster-container">
+                            <!-- Clusters will be rendered here -->
+                        </div>
                     </div>
                     
                     <div class="selection-controls hidden" id="grid-controls">
