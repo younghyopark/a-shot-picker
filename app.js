@@ -142,7 +142,7 @@ const elements = {
     resultsGrid: document.getElementById('results-grid'),
     copyFilenames: document.getElementById('copy-filenames'),
     downloadList: document.getElementById('download-list'),
-    startOver: document.getElementById('start-over'),
+    continueRanking: document.getElementById('continue-ranking'),
     
     // Photo viewer
     photoViewer: document.getElementById('photo-viewer'),
@@ -428,24 +428,72 @@ function getNextPair() {
     return [shuffledAll[0], shuffledAll[1]];
 }
 
+// Track previous top N sets for stability measurement
+let previousTopNSets = [];
+
 function calculateConfidence() {
-    // Confidence based on:
-    // 1. Number of comparisons done
-    // 2. How many photos have been compared at least once
-    // 3. Stability of top N rankings
+    // Confidence based on how stable the TOP N SET is (not the order within it)
+    // The progress bar measures whether the same photos stay in the top N
     
     const n = state.candidates.length;
-    const minComparisons = n * Math.log2(n); // Theoretical minimum for sorting
-    const targetComparisons = minComparisons * 1.5; // Aim for 50% more for confidence
+    const targetN = Math.min(state.targetCount, n);
     
-    const completionRatio = Math.min(1, state.comparisonsCompleted / targetComparisons);
+    if (targetN < 2 || state.comparisonsCompleted < 2) {
+        return 0;
+    }
     
-    // Check how many photos have at least 2 comparisons
-    const wellCompared = state.candidates.filter(p => (p.comparisons || 0) >= 2).length;
-    const coverageRatio = wellCompared / n;
+    // Get current top N photo IDs as a Set
+    const sortedByElo = [...state.candidates].sort((a, b) => b.elo - a.elo);
+    const currentTopNIds = new Set(sortedByElo.slice(0, targetN).map(p => p.id));
     
-    // Weighted confidence
-    const confidence = (completionRatio * 0.6 + coverageRatio * 0.4) * 100;
+    // Add to history (keep last 10 snapshots)
+    previousTopNSets.push(currentTopNIds);
+    if (previousTopNSets.length > 10) {
+        previousTopNSets.shift();
+    }
+    
+    // Need at least 3 snapshots to measure stability
+    if (previousTopNSets.length < 3) {
+        return Math.min(20, state.comparisonsCompleted * 5);
+    }
+    
+    // Calculate stability: how many of the last snapshots have the same set
+    let stableCount = 0;
+    for (let i = 1; i < previousTopNSets.length; i++) {
+        const prevSet = previousTopNSets[i - 1];
+        const currSet = previousTopNSets[i];
+        
+        // Check if sets are identical (same photos, regardless of order)
+        let identical = true;
+        if (prevSet.size !== currSet.size) {
+            identical = false;
+        } else {
+            for (const id of currSet) {
+                if (!prevSet.has(id)) {
+                    identical = false;
+                    break;
+                }
+            }
+        }
+        
+        if (identical) {
+            stableCount++;
+        }
+    }
+    
+    // Stability ratio (how many consecutive snapshots were stable)
+    const stabilityRatio = stableCount / (previousTopNSets.length - 1);
+    
+    // Also factor in basic coverage (has everyone been compared at least once?)
+    const comparedCount = state.candidates.filter(p => (p.comparisons || 0) >= 1).length;
+    const coverageRatio = comparedCount / n;
+    
+    // Confidence: mostly stability, with coverage as a baseline
+    // Need good coverage AND stability to reach high confidence
+    const baseConfidence = coverageRatio * 30; // Up to 30% from coverage
+    const stabilityConfidence = stabilityRatio * 70; // Up to 70% from stability
+    
+    const confidence = baseConfidence + stabilityConfidence;
     
     return Math.min(100, Math.round(confidence));
 }
@@ -1174,6 +1222,7 @@ function startRankingPhase() {
     state.comparisonHistory = [];
     state.comparisonsCompleted = 0;
     state.currentPhase = 'ranking';
+    previousTopNSets = []; // Reset stability tracking
     
     elements.rankingPool.textContent = `Candidates: ${state.candidates.length}`;
     elements.targetDisplay.textContent = `Target: ${state.targetCount}`;
@@ -1347,6 +1396,18 @@ function finishRanking() {
     
     showResults();
     scheduleSave(); // Save final results
+}
+
+function continueRanking() {
+    // Go back to ranking phase from results
+    state.currentPhase = 'ranking';
+    
+    showScreen('ranking-screen');
+    elements.rankingPool.textContent = `Candidates: ${state.candidates.length}`;
+    elements.targetDisplay.textContent = `Target: ${state.targetCount}`;
+    showNextComparison();
+    
+    scheduleSave();
 }
 
 // ============================================
@@ -1705,7 +1766,7 @@ elements.finishRanking.addEventListener('click', finishRanking);
 // Results
 elements.copyFilenames.addEventListener('click', copyFilenames);
 elements.downloadList.addEventListener('click', downloadList);
-elements.startOver.addEventListener('click', startOver);
+elements.continueRanking.addEventListener('click', continueRanking);
 
 // Photo viewer
 elements.closeViewer.addEventListener('click', closePhotoViewer);
