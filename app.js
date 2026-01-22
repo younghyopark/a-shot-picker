@@ -173,7 +173,11 @@ const elements = {
     previewTopBtn: document.getElementById('preview-top-btn'),
     topRankedModal: document.getElementById('top-ranked-modal'),
     topRankedClose: document.getElementById('top-ranked-close'),
-    topRankedGrid: document.getElementById('top-ranked-grid')
+    topRankedGrid: document.getElementById('top-ranked-grid'),
+    
+    // Ranking screen additional buttons
+    rankingImportBtn: document.getElementById('ranking-import-btn'),
+    addMoreCandidatesBtn: document.getElementById('add-more-candidates-btn')
 };
 
 // ============================================
@@ -1604,7 +1608,14 @@ function swipeToggleSelect() {
 // ============================================
 
 function startRankingPhase() {
-    // Prepare candidates from selection
+    // Check if we're returning from "Add More" mode (candidates already exist)
+    if (state.candidates.length > 0 && state.currentPhase === 'selection') {
+        // Adding more candidates to existing ranking
+        returnToRankingWithNewCandidates();
+        return;
+    }
+    
+    // Fresh start - prepare candidates from selection
     state.candidates = state.allPhotos
         .filter(p => state.selectedIds.has(p.id))
         .map(p => ({
@@ -1912,12 +1923,16 @@ function closePhotoViewer() {
 // ============================================
 
 function openImportModal() {
+    importMode = 'selection';
     elements.importModal.classList.remove('hidden');
+    elements.importTextarea.value = '';
     elements.importTextarea.focus();
+    updateImportPreview();
 }
 
 function closeImportModal() {
     elements.importModal.classList.add('hidden');
+    importMode = 'selection'; // Reset mode
 }
 
 function parseImportNumbers(text) {
@@ -1945,6 +1960,12 @@ function updateImportPreview() {
 }
 
 function confirmImport() {
+    // Route to appropriate handler based on mode
+    if (importMode === 'ranking') {
+        confirmImportForRanking();
+        return;
+    }
+    
     const text = elements.importTextarea.value;
     const numbers = parseImportNumbers(text);
     
@@ -2006,6 +2027,128 @@ function confirmImport() {
         elements.importSelectionBtn.style.background = '';
         elements.importSelectionBtn.style.color = '';
     }, 3000);
+}
+
+// Track which mode triggered the import modal
+let importMode = 'selection'; // 'selection' or 'ranking'
+
+function openImportModalForRanking() {
+    importMode = 'ranking';
+    elements.importModal.classList.remove('hidden');
+    elements.importTextarea.value = '';
+    elements.importTextarea.focus();
+    updateImportPreview();
+}
+
+function confirmImportForRanking() {
+    const text = elements.importTextarea.value;
+    const numbers = parseImportNumbers(text);
+    
+    if (numbers.length === 0) {
+        closeImportModal();
+        return;
+    }
+    
+    // Find matching photos that are NOT already candidates
+    const existingCandidateIds = new Set(state.candidates.map(c => c.id));
+    let matchCount = 0;
+    let addedCount = 0;
+    
+    for (const photo of state.allPhotos) {
+        // Extract numbers from filename
+        const filenameNumbers = photo.name.match(/\d+/g);
+        if (!filenameNumbers) continue;
+        
+        const photoNumbers = filenameNumbers.map(n => parseInt(n, 10));
+        
+        for (const importedNum of numbers) {
+            if (photoNumbers.includes(importedNum)) {
+                matchCount++;
+                
+                // Add to candidates if not already there
+                if (!existingCandidateIds.has(photo.id)) {
+                    state.candidates.push({
+                        ...photo,
+                        elo: ELO_DEFAULT,
+                        comparisons: 0
+                    });
+                    state.selectedIds.add(photo.id);
+                    addedCount++;
+                }
+                break;
+            }
+        }
+    }
+    
+    closeImportModal();
+    
+    // Update ranking UI
+    elements.rankingPool.textContent = `Candidates: ${state.candidates.length}`;
+    
+    // Show feedback
+    console.log(`📥 Ranking import: matched ${matchCount}, added ${addedCount} new candidates`);
+    
+    elements.rankingImportBtn.textContent = `✓ +${addedCount} added`;
+    elements.rankingImportBtn.style.background = 'var(--success)';
+    elements.rankingImportBtn.style.color = 'white';
+    
+    setTimeout(() => {
+        elements.rankingImportBtn.textContent = '📥 Import';
+        elements.rankingImportBtn.style.background = '';
+        elements.rankingImportBtn.style.color = '';
+    }, 3000);
+    
+    scheduleSave();
+}
+
+function addMoreCandidates() {
+    // Go back to selection phase but keep existing candidates
+    state.currentPhase = 'selection';
+    
+    // Make sure all current candidates are marked as selected
+    for (const candidate of state.candidates) {
+        state.selectedIds.add(candidate.id);
+    }
+    
+    showScreen('selection-screen');
+    
+    // Render the appropriate view
+    if (state.viewMode === 'swipe') {
+        renderSwipeView();
+    } else if (state.viewMode === 'cluster') {
+        renderClusterView();
+    } else {
+        renderSelectionPage();
+    }
+    
+    updateSelectionStats();
+}
+
+function returnToRankingWithNewCandidates() {
+    // Called when user proceeds from selection after adding more
+    // Find newly selected photos that aren't already candidates
+    const existingCandidateIds = new Set(state.candidates.map(c => c.id));
+    
+    for (const id of state.selectedIds) {
+        if (!existingCandidateIds.has(id)) {
+            const photo = state.allPhotos.find(p => p.id === id);
+            if (photo) {
+                state.candidates.push({
+                    ...photo,
+                    elo: ELO_DEFAULT,
+                    comparisons: 0
+                });
+            }
+        }
+    }
+    
+    state.currentPhase = 'ranking';
+    
+    elements.rankingPool.textContent = `Candidates: ${state.candidates.length}`;
+    showScreen('ranking-screen');
+    showNextComparison();
+    
+    scheduleSave();
 }
 
 // ============================================
@@ -2172,6 +2315,8 @@ elements.skipComparison.addEventListener('click', skipComparison);
 elements.undoComparison.addEventListener('click', undoComparison);
 elements.confirmRanking.addEventListener('click', confirmComparison);
 elements.finishRanking.addEventListener('click', finishRanking);
+elements.rankingImportBtn.addEventListener('click', openImportModalForRanking);
+elements.addMoreCandidatesBtn.addEventListener('click', addMoreCandidates);
 
 // Results
 elements.copyFilenames.addEventListener('click', copyFilenames);
