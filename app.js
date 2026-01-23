@@ -168,6 +168,9 @@ const elements = {
     importTextarea: document.getElementById('import-textarea'),
     importPreview: document.getElementById('import-preview'),
     importConfirmBtn: document.getElementById('import-confirm-btn'),
+    importFileInput: document.getElementById('import-file-input'),
+    importFileBtn: document.getElementById('import-file-btn'),
+    importFileName: document.getElementById('import-file-name'),
     
     // Top ranked preview modal
     previewTopBtn: document.getElementById('preview-top-btn'),
@@ -177,7 +180,9 @@ const elements = {
     
     // Ranking screen additional buttons
     rankingImportBtn: document.getElementById('ranking-import-btn'),
-    addMoreCandidatesBtn: document.getElementById('add-more-candidates-btn')
+    addMoreCandidatesBtn: document.getElementById('add-more-candidates-btn'),
+    exportCandidatesBtn: document.getElementById('export-candidates-btn'),
+    exportAshotsBtn: document.getElementById('export-ashots-btn')
 };
 
 // ============================================
@@ -1935,28 +1940,95 @@ function closeImportModal() {
     importMode = 'selection'; // Reset mode
 }
 
-function parseImportNumbers(text) {
-    // Extract all numbers from the text using regex
-    // This handles any format: spaces, commas, slashes, line breaks, etc.
-    const matches = text.match(/\d+/g);
-    if (!matches) return [];
+// Parse import text - supports multiple formats:
+// 1. Plain numbers: "123 456 789" or "123, 456, 789" or "123/456/789"
+// 2. Export format: "1. DSC_1234.jpg (Rating: 1623, Comparisons: 8)"
+// 3. Just filenames: "DSC_1234.jpg"
+function parseImportData(text) {
+    const lines = text.split('\n');
+    const filenames = [];
+    const numbers = [];
     
-    // Convert to unique integers
-    const numbers = [...new Set(matches.map(n => parseInt(n, 10)))];
-    return numbers.sort((a, b) => a - b);
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        
+        // Try to match export format: "1. filename.jpg (Rating: ...)"
+        const exportMatch = trimmed.match(/^\d+\.\s+(.+?)\s+\(Rating:/);
+        if (exportMatch) {
+            filenames.push(exportMatch[1].trim());
+            continue;
+        }
+        
+        // Try to match just a filename (contains a dot and image extension)
+        const filenameMatch = trimmed.match(/^([^(]+\.(jpg|jpeg|png|gif|webp|bmp|tiff|tif|heic|heif|raw|cr2|nef|arw))$/i);
+        if (filenameMatch) {
+            filenames.push(filenameMatch[1].trim());
+            continue;
+        }
+        
+        // Otherwise extract numbers from the line
+        const lineNumbers = trimmed.match(/\d+/g);
+        if (lineNumbers) {
+            numbers.push(...lineNumbers.map(n => parseInt(n, 10)));
+        }
+    }
+    
+    return {
+        filenames: [...new Set(filenames)],
+        numbers: [...new Set(numbers)].sort((a, b) => a - b)
+    };
+}
+
+// Legacy function for preview (show count of detected items)
+function parseImportNumbers(text) {
+    const { filenames, numbers } = parseImportData(text);
+    // For backwards compatibility, return numbers if no filenames found
+    if (filenames.length > 0) {
+        return filenames; // Return filenames as the "matches"
+    }
+    return numbers;
 }
 
 function updateImportPreview() {
     const text = elements.importTextarea.value;
-    const numbers = parseImportNumbers(text);
+    const { filenames, numbers } = parseImportData(text);
     
-    if (numbers.length === 0) {
-        elements.importPreview.textContent = '0 numbers detected';
-        elements.importPreview.style.color = 'var(--text-muted)';
-    } else {
+    if (filenames.length > 0 && numbers.length > 0) {
+        elements.importPreview.textContent = `${filenames.length} filenames + ${numbers.length} numbers detected`;
+        elements.importPreview.style.color = 'var(--success)';
+    } else if (filenames.length > 0) {
+        elements.importPreview.textContent = `${filenames.length} filenames detected`;
+        elements.importPreview.style.color = 'var(--success)';
+    } else if (numbers.length > 0) {
         elements.importPreview.textContent = `${numbers.length} numbers detected`;
         elements.importPreview.style.color = 'var(--success)';
+    } else {
+        elements.importPreview.textContent = '0 items detected';
+        elements.importPreview.style.color = 'var(--text-muted)';
     }
+}
+
+function matchPhotoByImportData(photo, filenames, numbers) {
+    // First try exact filename match
+    if (filenames.includes(photo.name)) {
+        return true;
+    }
+    
+    // Then try number matching in filename
+    if (numbers.length > 0) {
+        const filenameNumbers = photo.name.match(/\d+/g);
+        if (filenameNumbers) {
+            const photoNumbers = filenameNumbers.map(n => parseInt(n, 10));
+            for (const importedNum of numbers) {
+                if (photoNumbers.includes(importedNum)) {
+                    return true;
+                }
+            }
+        }
+    }
+    
+    return false;
 }
 
 function confirmImport() {
@@ -1967,9 +2039,9 @@ function confirmImport() {
     }
     
     const text = elements.importTextarea.value;
-    const numbers = parseImportNumbers(text);
+    const { filenames, numbers } = parseImportData(text);
     
-    if (numbers.length === 0) {
+    if (filenames.length === 0 && numbers.length === 0) {
         closeImportModal();
         return;
     }
@@ -1978,19 +2050,9 @@ function confirmImport() {
     let matchCount = 0;
     
     for (const photo of state.allPhotos) {
-        // Extract numbers from filename
-        const filenameNumbers = photo.name.match(/\d+/g);
-        if (!filenameNumbers) continue;
-        
-        // Check if any number in the filename matches an imported number
-        const photoNumbers = filenameNumbers.map(n => parseInt(n, 10));
-        
-        for (const importedNum of numbers) {
-            if (photoNumbers.includes(importedNum)) {
-                state.selectedIds.add(photo.id);
-                matchCount++;
-                break;
-            }
+        if (matchPhotoByImportData(photo, filenames, numbers)) {
+            state.selectedIds.add(photo.id);
+            matchCount++;
         }
     }
     
@@ -2014,7 +2076,8 @@ function confirmImport() {
     }
     
     // Show feedback
-    console.log(`📥 Imported selection: matched ${matchCount} photos from ${numbers.length} numbers`);
+    const totalItems = filenames.length + numbers.length;
+    console.log(`📥 Imported selection: matched ${matchCount} photos from ${totalItems} items`);
     
     // Update button to show result
     elements.importSelectionBtn.textContent = `✓ ${matchCount} matched`;
@@ -2042,9 +2105,9 @@ function openImportModalForRanking() {
 
 function confirmImportForRanking() {
     const text = elements.importTextarea.value;
-    const numbers = parseImportNumbers(text);
+    const { filenames, numbers } = parseImportData(text);
     
-    if (numbers.length === 0) {
+    if (filenames.length === 0 && numbers.length === 0) {
         closeImportModal();
         return;
     }
@@ -2055,27 +2118,18 @@ function confirmImportForRanking() {
     let addedCount = 0;
     
     for (const photo of state.allPhotos) {
-        // Extract numbers from filename
-        const filenameNumbers = photo.name.match(/\d+/g);
-        if (!filenameNumbers) continue;
-        
-        const photoNumbers = filenameNumbers.map(n => parseInt(n, 10));
-        
-        for (const importedNum of numbers) {
-            if (photoNumbers.includes(importedNum)) {
-                matchCount++;
-                
-                // Add to candidates if not already there
-                if (!existingCandidateIds.has(photo.id)) {
-                    state.candidates.push({
-                        ...photo,
-                        elo: ELO_DEFAULT,
-                        comparisons: 0
-                    });
-                    state.selectedIds.add(photo.id);
-                    addedCount++;
-                }
-                break;
+        if (matchPhotoByImportData(photo, filenames, numbers)) {
+            matchCount++;
+            
+            // Add to candidates if not already there
+            if (!existingCandidateIds.has(photo.id)) {
+                state.candidates.push({
+                    ...photo,
+                    elo: ELO_DEFAULT,
+                    comparisons: 0
+                });
+                state.selectedIds.add(photo.id);
+                addedCount++;
             }
         }
     }
@@ -2149,6 +2203,216 @@ function returnToRankingWithNewCandidates() {
     showNextComparison();
     
     scheduleSave();
+}
+
+// ============================================
+// Export Candidates as Zip
+// ============================================
+
+async function exportCandidatesAsZip() {
+    if (state.candidates.length === 0) {
+        alert('No candidates to export.');
+        return;
+    }
+    
+    // Check if JSZip is available
+    if (typeof JSZip === 'undefined') {
+        alert('Zip library not loaded. Please check your internet connection and reload.');
+        return;
+    }
+    
+    const btn = elements.exportCandidatesBtn;
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ Preparing...';
+    
+    try {
+        const zip = new JSZip();
+        const candidates = state.candidates;
+        
+        // Create filenames list (sorted by Elo rating)
+        const sortedCandidates = [...candidates].sort((a, b) => b.elo - a.elo);
+        const filenamesList = sortedCandidates.map((photo, index) => 
+            `${index + 1}. ${photo.name} (Rating: ${Math.round(photo.elo)}, Comparisons: ${photo.comparisons || 0})`
+        ).join('\n');
+        
+        // Add the text file with filenames
+        const header = `A-Shot Picker - Candidate Photos Export
+Generated: ${new Date().toLocaleString()}
+Total Candidates: ${candidates.length}
+Target Selection: ${state.targetCount}
+
+Ranked by Elo Rating:
+${'='.repeat(50)}
+
+`;
+        zip.file('_filenames.txt', header + filenamesList);
+        
+        // Add each photo to the zip
+        for (let i = 0; i < candidates.length; i++) {
+            const photo = candidates[i];
+            
+            btn.textContent = `📦 ${i + 1}/${candidates.length}`;
+            
+            try {
+                const file = await photo.handle.getFile();
+                const arrayBuffer = await file.arrayBuffer();
+                
+                // Preserve original filename
+                zip.file(photo.name, arrayBuffer);
+            } catch (err) {
+                console.warn(`Failed to add ${photo.name} to zip:`, err);
+            }
+            
+            // Allow UI to update every 10 files
+            if (i % 10 === 0) {
+                await new Promise(r => setTimeout(r, 0));
+            }
+        }
+        
+        btn.textContent = '⏳ Compressing...';
+        
+        // Generate the zip file
+        const zipBlob = await zip.generateAsync({ 
+            type: 'blob',
+            compression: 'DEFLATE',
+            compressionOptions: { level: 6 }
+        }, (metadata) => {
+            // Progress callback
+            btn.textContent = `📦 ${Math.round(metadata.percent)}%`;
+        });
+        
+        // Create download link
+        const url = URL.createObjectURL(zipBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ashot-candidates-${new Date().toISOString().slice(0, 10)}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        btn.textContent = '✓ Exported!';
+        btn.style.background = 'var(--success)';
+        btn.style.color = 'white';
+        
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.style.background = '';
+            btn.style.color = '';
+            btn.disabled = false;
+        }, 3000);
+        
+    } catch (err) {
+        console.error('Export failed:', err);
+        alert('Export failed: ' + err.message);
+        btn.textContent = originalText;
+        btn.disabled = false;
+    }
+}
+
+async function exportAshotsAsZip() {
+    if (state.candidates.length === 0) {
+        alert('No candidates to export.');
+        return;
+    }
+    
+    // Check if JSZip is available
+    if (typeof JSZip === 'undefined') {
+        alert('Zip library not loaded. Please check your internet connection and reload.');
+        return;
+    }
+    
+    const btn = elements.exportAshotsBtn;
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ Preparing...';
+    
+    try {
+        const zip = new JSZip();
+        
+        // Get top N by Elo rating (the A-shots)
+        const sortedCandidates = [...state.candidates].sort((a, b) => b.elo - a.elo);
+        const ashots = sortedCandidates.slice(0, state.targetCount);
+        
+        // Create filenames list
+        const filenamesList = ashots.map((photo, index) => 
+            `${index + 1}. ${photo.name} (Rating: ${Math.round(photo.elo)}, Comparisons: ${photo.comparisons || 0})`
+        ).join('\n');
+        
+        // Add the text file with filenames
+        const header = `A-Shot Picker - Selected A-Shots Export
+Generated: ${new Date().toLocaleString()}
+Total A-Shots: ${ashots.length}
+Total Candidates: ${state.candidates.length}
+Comparisons Done: ${state.comparisonsCompleted}
+
+Top ${ashots.length} Photos by Elo Rating:
+${'='.repeat(50)}
+
+`;
+        zip.file('_ashots.txt', header + filenamesList);
+        
+        // Add each A-shot photo to the zip
+        for (let i = 0; i < ashots.length; i++) {
+            const photo = ashots[i];
+            
+            btn.textContent = `📦 ${i + 1}/${ashots.length}`;
+            
+            try {
+                const file = await photo.handle.getFile();
+                const arrayBuffer = await file.arrayBuffer();
+                
+                // Preserve original filename
+                zip.file(photo.name, arrayBuffer);
+            } catch (err) {
+                console.warn(`Failed to add ${photo.name} to zip:`, err);
+            }
+            
+            // Allow UI to update
+            if (i % 5 === 0) {
+                await new Promise(r => setTimeout(r, 0));
+            }
+        }
+        
+        btn.textContent = '⏳ Compressing...';
+        
+        // Generate the zip file
+        const zipBlob = await zip.generateAsync({ 
+            type: 'blob',
+            compression: 'DEFLATE',
+            compressionOptions: { level: 6 }
+        }, (metadata) => {
+            btn.textContent = `📦 ${Math.round(metadata.percent)}%`;
+        });
+        
+        // Create download link
+        const url = URL.createObjectURL(zipBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ashots-top${ashots.length}-${new Date().toISOString().slice(0, 10)}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        btn.textContent = '✓ Exported!';
+        btn.style.background = 'var(--success)';
+        btn.style.color = 'white';
+        
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.style.background = '';
+            btn.style.color = '';
+            btn.disabled = false;
+        }, 3000);
+        
+    } catch (err) {
+        console.error('Export failed:', err);
+        alert('Export failed: ' + err.message);
+        btn.textContent = originalText;
+        btn.disabled = false;
+    }
 }
 
 // ============================================
@@ -2317,6 +2581,8 @@ elements.confirmRanking.addEventListener('click', confirmComparison);
 elements.finishRanking.addEventListener('click', finishRanking);
 elements.rankingImportBtn.addEventListener('click', openImportModalForRanking);
 elements.addMoreCandidatesBtn.addEventListener('click', addMoreCandidates);
+elements.exportCandidatesBtn.addEventListener('click', exportCandidatesAsZip);
+elements.exportAshotsBtn.addEventListener('click', exportAshotsAsZip);
 
 // Results
 elements.copyFilenames.addEventListener('click', copyFilenames);
@@ -2341,6 +2607,27 @@ elements.importModal.addEventListener('click', (e) => {
 });
 elements.importTextarea.addEventListener('input', updateImportPreview);
 elements.importConfirmBtn.addEventListener('click', confirmImport);
+
+// File input for loading .txt files
+elements.importFileBtn.addEventListener('click', () => {
+    elements.importFileInput.click();
+});
+elements.importFileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (file) {
+        try {
+            const text = await file.text();
+            elements.importTextarea.value = text;
+            elements.importFileName.textContent = file.name;
+            updateImportPreview();
+        } catch (err) {
+            console.error('Error reading file:', err);
+            alert('Error reading file: ' + err.message);
+        }
+    }
+    // Reset the input so the same file can be selected again
+    e.target.value = '';
+});
 
 // Top ranked preview modal
 elements.previewTopBtn.addEventListener('click', openTopRankedPreview);

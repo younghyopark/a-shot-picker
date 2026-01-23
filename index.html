@@ -12,6 +12,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
     <div id="app">
@@ -226,11 +227,23 @@
                     <span id="ranking-pool">Candidates: 0</span>
                     <span id="target-display">Target: 25</span>
                 </div>
-                <div class="header-actions">
-                    <button id="ranking-import-btn" class="secondary-btn" title="Import photo numbers to add as candidates">📥 Import</button>
-                    <button id="add-more-candidates-btn" class="secondary-btn" title="Go back to selection to add more candidates">➕ Add More</button>
-                    <button id="preview-top-btn" class="secondary-btn">🏆 Preview Top</button>
-                    <button id="finish-ranking" class="secondary-btn">Finish & See Results</button>
+                <div class="header-actions-grouped">
+                    <div class="action-group">
+                        <span class="action-group-label">Candidates</span>
+                        <div class="action-group-buttons">
+                            <button id="ranking-import-btn" class="secondary-btn" title="Import photo numbers to add as candidates">📥 Import</button>
+                            <button id="export-candidates-btn" class="secondary-btn" title="Export all candidates as a zip file">📦 Export</button>
+                            <button id="add-more-candidates-btn" class="secondary-btn" title="Go back to selection to add more candidates">➕ Add</button>
+                        </div>
+                    </div>
+                    <div class="action-group">
+                        <span class="action-group-label">A-Shots</span>
+                        <div class="action-group-buttons">
+                            <button id="preview-top-btn" class="secondary-btn" title="Preview current top-ranked A-shots">🏆 Preview</button>
+                            <button id="export-ashots-btn" class="secondary-btn" title="Export top A-shots as a zip file">📦 Export</button>
+                        </div>
+                    </div>
+                    <button id="finish-ranking" class="primary-btn">Finish & See Results</button>
                 </div>
             </header>
 
@@ -293,12 +306,18 @@
         <div class="modal-content">
             <button class="modal-close" id="import-modal-close">×</button>
             <h2>📥 Import Selection</h2>
-            <p class="modal-description">Paste your photo numbers below. Any format works - numbers separated by spaces, commas, slashes, line breaks, etc.</p>
-            <textarea id="import-textarea" placeholder="Example:
-391
-464 498 522
+            <p class="modal-description">Load a txt file or paste photo numbers, filenames, or exported content below.</p>
+            <div class="import-file-row">
+                <input type="file" id="import-file-input" accept=".txt" style="display:none">
+                <button id="import-file-btn" class="secondary-btn">📄 Load .txt File</button>
+                <span id="import-file-name"></span>
+            </div>
+            <textarea id="import-textarea" placeholder="Examples:
+391 464 498 522
 569/605/594
 1647, 1650, 1668
+DSC_1234.jpg DSC_5678.jpg
+1. DSC_1234.jpg (Rating: 1623, Comparisons: 8)
 ..."></textarea>
             <div class="modal-footer">
                 <span id="import-preview">0 numbers detected</span>
