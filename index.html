@@ -20,48 +20,94 @@
         <section id="landing-screen" class="screen active">
             <div class="hero">
                 <h1>📸 A-Shot Picker</h1>
-                <p class="subtitle">Select your best 20-30 photos from thousands using our smart tournament system</p>
+                <p class="subtitle">Select your best A-shots from thousands.</p>
                 
-                <div class="features">
-                    <div class="feature">
-                        <span class="icon">🗂️</span>
-                        <h3>Load Folder</h3>
-                        <p>Select your photoshoot folder with 5000+ photos</p>
+                <div class="landing-content">
+                    <!-- Recent Folders Section (populated by JS) -->
+                    <div id="recent-folders" class="recent-folders hidden">
+                        <h3 class="section-label">Recent Projects</h3>
+                        <div id="recent-folders-list" class="recent-folders-list"></div>
                     </div>
-                    <div class="feature">
-                        <span class="icon">⚔️</span>
-                        <h3>Tournament Mode</h3>
-                        <p>Compare photos head-to-head to find your favorites</p>
-                    </div>
-                    <div class="feature">
-                        <span class="icon">🏆</span>
-                        <h3>Get A-Shots</h3>
-                        <p>Export your curated selection of 20-30 best photos</p>
-                    </div>
-                </div>
 
-                <div class="settings-panel">
-                    <h3>Selection Settings</h3>
-                    <div class="setting-row">
-                        <label for="target-count">Target A-Shots:</label>
-                        <input type="number" id="target-count" min="10" max="100" value="25">
+                    <!-- Divider (only shown when recent folders exist) -->
+                    <div id="landing-divider" class="landing-divider hidden">
+                        <span>or start fresh</span>
                     </div>
-                    <div class="setting-row">
-                        <label for="shuffle-photos">Photo Order:</label>
-                        <select id="shuffle-photos">
-                            <option value="original">Original (by filename)</option>
-                            <option value="shuffle">Shuffled (random)</option>
-                        </select>
-                    </div>
-                </div>
 
-                <button id="select-folder-btn" class="primary-btn">
-                    <span>📁</span> Select Photo Folder
-                </button>
+                    <button id="start-new-project-btn" class="primary-btn large-btn">
+                        <span>✨</span> Start New Project
+                    </button>
+                </div>
                 
                 <p class="browser-note">Works best in Chrome, Edge, or other Chromium browsers</p>
             </div>
         </section>
+
+        <!-- New Project Modal -->
+        <div id="new-project-modal" class="modal hidden">
+            <div class="modal-content new-project-modal-content">
+                <button class="modal-close" id="new-project-modal-close">×</button>
+                
+                <!-- Step 1: Select Folder -->
+                <div id="new-project-step-1" class="new-project-step active">
+                    <h2>📁 Select Your Photo Folder</h2>
+                    <p class="step-description">Choose a folder containing your photoshoot images</p>
+                    <button id="new-project-select-folder" class="primary-btn large-btn">
+                        <span>📂</span> Browse Folder
+                    </button>
+                </div>
+                
+                <!-- Step 2: Folder Analysis -->
+                <div id="new-project-step-2" class="new-project-step">
+                    <h2>🔍 Analyzing Folder</h2>
+                    <p class="step-description">Scanning for photos...</p>
+                    <div class="folder-analysis">
+                        <div class="spinner small"></div>
+                        <p id="analysis-status">Looking for images...</p>
+                    </div>
+                </div>
+                
+                <!-- Step 3: Settings -->
+                <div id="new-project-step-3" class="new-project-step">
+                    <h2>⚙️ Project Settings</h2>
+                    <p class="step-description" id="photo-count-info">Found X photos in your folder</p>
+                    
+                    <div class="settings-form">
+                        <div class="setting-group">
+                            <label for="modal-target-count">How many A-shots do you want to pick?</label>
+                            <div class="setting-input-row">
+                                <input type="number" id="modal-target-count" min="10" max="100" value="25">
+                                <span class="setting-hint">Usually 20-30 for a typical shoot</span>
+                            </div>
+                        </div>
+                        
+                        <div class="setting-group">
+                            <label>Photo review order</label>
+                            <div class="toggle-options">
+                                <button type="button" class="toggle-option active" data-value="original">
+                                    <span class="toggle-icon">📋</span>
+                                    <span class="toggle-label">Original Order</span>
+                                    <span class="toggle-desc">By filename</span>
+                                </button>
+                                <button type="button" class="toggle-option" data-value="shuffle">
+                                    <span class="toggle-icon">🎲</span>
+                                    <span class="toggle-label">Shuffled</span>
+                                    <span class="toggle-desc">Random order</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <button id="new-project-start" class="primary-btn large-btn">
+                        <span>🚀</span> Start Picking!
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Hidden inputs for compatibility -->
+        <input type="hidden" id="target-count" value="25">
+        <input type="hidden" id="shuffle-photos" value="original">
 
         <!-- Loading Screen -->
         <section id="loading-screen" class="screen">

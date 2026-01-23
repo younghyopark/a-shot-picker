@@ -82,9 +82,21 @@ const elements = {
     resultsScreen: document.getElementById('results-screen'),
     
     // Landing
-    selectFolderBtn: document.getElementById('select-folder-btn'),
+    startNewProjectBtn: document.getElementById('start-new-project-btn'),
     targetCountInput: document.getElementById('target-count'),
     shufflePhotosSelect: document.getElementById('shuffle-photos'),
+    
+    // New Project Modal
+    newProjectModal: document.getElementById('new-project-modal'),
+    newProjectModalClose: document.getElementById('new-project-modal-close'),
+    newProjectStep1: document.getElementById('new-project-step-1'),
+    newProjectStep2: document.getElementById('new-project-step-2'),
+    newProjectStep3: document.getElementById('new-project-step-3'),
+    newProjectSelectFolder: document.getElementById('new-project-select-folder'),
+    analysisStatus: document.getElementById('analysis-status'),
+    photoCountInfo: document.getElementById('photo-count-info'),
+    modalTargetCount: document.getElementById('modal-target-count'),
+    newProjectStart: document.getElementById('new-project-start'),
     
     // Loading
     loadingStatus: document.getElementById('loading-status'),
@@ -210,58 +222,101 @@ function isImageFile(filename) {
 }
 
 // ============================================
-// Persistence - IndexedDB for folder handle
+// Persistence - IndexedDB for folder handles (multiple folders support)
 // ============================================
 
 async function openDatabase() {
     return new Promise((resolve, reject) => {
-        const request = indexedDB.open(DB_NAME, 1);
+        const request = indexedDB.open(DB_NAME, 2); // Version 2 for new schema
         request.onerror = () => reject(request.error);
         request.onsuccess = () => resolve(request.result);
         request.onupgradeneeded = (event) => {
             const db = event.target.result;
-            if (!db.objectStoreNames.contains(DB_STORE)) {
-                db.createObjectStore(DB_STORE, { keyPath: 'id' });
+            // Delete old store if exists (from version 1)
+            if (db.objectStoreNames.contains(DB_STORE)) {
+                db.deleteObjectStore(DB_STORE);
             }
+            // Create new store with folder name as key
+            const store = db.createObjectStore(DB_STORE, { keyPath: 'folderName' });
+            store.createIndex('lastAccess', 'lastAccess', { unique: false });
         };
     });
 }
 
-async function saveFolderHandle(dirHandle) {
+async function saveFolderHandle(dirHandle, metadata = {}) {
     try {
         const db = await openDatabase();
         const tx = db.transaction(DB_STORE, 'readwrite');
         const store = tx.objectStore(DB_STORE);
-        await store.put({ id: 'lastFolder', handle: dirHandle });
-        console.log('📁 Folder handle saved to IndexedDB');
+        
+        // Get existing data to preserve metadata
+        const existing = await new Promise((resolve) => {
+            const req = store.get(dirHandle.name);
+            req.onsuccess = () => resolve(req.result || {});
+            req.onerror = () => resolve({});
+        });
+        
+        await store.put({
+            folderName: dirHandle.name,
+            handle: dirHandle,
+            lastAccess: Date.now(),
+            // Preserve existing metadata but allow updates
+            photoCount: metadata.photoCount ?? existing.photoCount ?? 0,
+            candidateCount: metadata.candidateCount ?? existing.candidateCount ?? 0,
+            currentPhase: metadata.currentPhase ?? existing.currentPhase ?? 'selection',
+            comparisonsCompleted: metadata.comparisonsCompleted ?? existing.comparisonsCompleted ?? 0,
+            targetCount: metadata.targetCount ?? existing.targetCount ?? 25
+        });
+        console.log('📁 Folder handle saved to IndexedDB:', dirHandle.name);
     } catch (err) {
         console.warn('Failed to save folder handle:', err);
     }
 }
 
-async function loadFolderHandle() {
+async function loadAllFolderHandles() {
     try {
         const db = await openDatabase();
         const tx = db.transaction(DB_STORE, 'readonly');
         const store = tx.objectStore(DB_STORE);
-        const request = store.get('lastFolder');
+        const index = store.index('lastAccess');
         
         return new Promise((resolve, reject) => {
-            request.onsuccess = () => resolve(request.result?.handle || null);
+            const request = index.openCursor(null, 'prev'); // Sort by lastAccess descending
+            const results = [];
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    results.push(cursor.value);
+                    cursor.continue();
+                } else {
+                    resolve(results);
+                }
+            };
             request.onerror = () => reject(request.error);
         });
     } catch (err) {
-        console.warn('Failed to load folder handle:', err);
-        return null;
+        console.warn('Failed to load folder handles:', err);
+        return [];
     }
 }
 
-async function clearFolderHandle() {
+async function loadFolderHandle() {
+    // For backward compatibility - returns the most recent folder
+    const folders = await loadAllFolderHandles();
+    return folders.length > 0 ? folders[0].handle : null;
+}
+
+async function clearFolderHandle(folderName) {
     try {
         const db = await openDatabase();
         const tx = db.transaction(DB_STORE, 'readwrite');
         const store = tx.objectStore(DB_STORE);
-        await store.delete('lastFolder');
+        if (folderName) {
+            await store.delete(folderName);
+        } else {
+            // Clear all
+            await store.clear();
+        }
     } catch (err) {
         console.warn('Failed to clear folder handle:', err);
     }
@@ -348,7 +403,13 @@ function scheduleSave() {
     if (saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(() => {
         saveSessionToFolder();
-        saveFolderHandle(state.dirHandle);
+        saveFolderHandle(state.dirHandle, {
+            photoCount: state.allPhotos.length,
+            candidateCount: state.candidates.length,
+            currentPhase: state.currentPhase,
+            comparisonsCompleted: state.comparisonsCompleted,
+            targetCount: state.targetCount
+        });
     }, 2000);
 }
 
@@ -519,19 +580,149 @@ function calculateConfidence() {
 }
 
 // ============================================
-// File System Access
+// New Project Modal
 // ============================================
 
-async function selectFolder() {
+// Temporary storage for new project setup
+let newProjectState = {
+    dirHandle: null,
+    photoCount: 0
+};
+
+function openNewProjectModal() {
+    elements.newProjectModal.classList.remove('hidden');
+    showNewProjectStep(1);
+    newProjectState = { dirHandle: null, photoCount: 0 };
+}
+
+function closeNewProjectModal() {
+    elements.newProjectModal.classList.add('hidden');
+    newProjectState = { dirHandle: null, photoCount: 0 };
+}
+
+function showNewProjectStep(step) {
+    elements.newProjectStep1.classList.remove('active');
+    elements.newProjectStep2.classList.remove('active');
+    elements.newProjectStep3.classList.remove('active');
+    
+    if (step === 1) elements.newProjectStep1.classList.add('active');
+    if (step === 2) elements.newProjectStep2.classList.add('active');
+    if (step === 3) elements.newProjectStep3.classList.add('active');
+}
+
+// Guard to prevent multiple file picker dialogs
+let isFilePickerActive = false;
+
+async function selectFolderForNewProject() {
+    if (isFilePickerActive) return;
+    
     try {
         if (!('showDirectoryPicker' in window)) {
             alert('Your browser does not support the File System Access API. Please use Chrome, Edge, or another Chromium-based browser.');
             return;
         }
 
+        isFilePickerActive = true;
         const dirHandle = await window.showDirectoryPicker();
+        isFilePickerActive = false;
+        
+        newProjectState.dirHandle = dirHandle;
+        
+        // Move to analysis step
+        showNewProjectStep(2);
+        elements.analysisStatus.textContent = `Scanning "${dirHandle.name}"...`;
+        
+        // Count photos
+        let photoCount = 0;
+        const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
+        
+        for await (const entry of dirHandle.values()) {
+            if (entry.kind === 'file') {
+                const ext = entry.name.toLowerCase().substring(entry.name.lastIndexOf('.'));
+                if (imageExtensions.includes(ext)) {
+                    photoCount++;
+                    if (photoCount % 100 === 0) {
+                        elements.analysisStatus.textContent = `Found ${photoCount} photos...`;
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                }
+            }
+        }
+        
+        newProjectState.photoCount = photoCount;
+        
+        if (photoCount === 0) {
+            elements.analysisStatus.textContent = 'No photos found in this folder.';
+            setTimeout(() => showNewProjectStep(1), 2000);
+            return;
+        }
+        
+        // Move to settings step
+        elements.photoCountInfo.textContent = `Found ${photoCount.toLocaleString()} photos in "${dirHandle.name}"`;
+        
+        // Suggest target count based on photo count
+        const suggestedTarget = Math.min(30, Math.max(10, Math.round(photoCount * 0.01)));
+        elements.modalTargetCount.value = suggestedTarget;
+        
+        showNewProjectStep(3);
+        
+    } catch (err) {
+        isFilePickerActive = false;
+        if (err.name !== 'AbortError') {
+            console.error('Error selecting folder:', err);
+            alert('Error selecting folder: ' + err.message);
+        }
+        showNewProjectStep(1);
+    }
+}
+
+async function startNewProject() {
+    if (!newProjectState.dirHandle) {
+        alert('Please select a folder first.');
+        return;
+    }
+    
+    // Get settings from modal
+    const targetCount = parseInt(elements.modalTargetCount.value) || 25;
+    const shuffleOption = document.querySelector('.toggle-option.active')?.dataset.value || 'original';
+    
+    // Update hidden inputs for compatibility
+    elements.targetCountInput.value = targetCount;
+    elements.shufflePhotosSelect.value = shuffleOption;
+    
+    // Save dirHandle before closing modal (which resets newProjectState)
+    const dirHandle = newProjectState.dirHandle;
+    
+    // Close modal
+    elements.newProjectModal.classList.add('hidden');
+    
+    // Load photos with saved handle
+    await loadPhotosFromDirectory(dirHandle, true); // Skip cache check for new project
+    
+    // Reset state after loading
+    newProjectState = { dirHandle: null, photoCount: 0 };
+}
+
+// ============================================
+// File System Access
+// ============================================
+
+async function selectFolder() {
+    if (isFilePickerActive) return;
+    
+    try {
+        if (!('showDirectoryPicker' in window)) {
+            alert('Your browser does not support the File System Access API. Please use Chrome, Edge, or another Chromium-based browser.');
+            return;
+        }
+
+        isFilePickerActive = true;
+        const dirHandle = await window.showDirectoryPicker();
+        isFilePickerActive = false;
+        
         await loadPhotosFromDirectory(dirHandle);
     } catch (err) {
+        isFilePickerActive = false;
         if (err.name !== 'AbortError') {
             console.error('Error selecting folder:', err);
             alert('Error selecting folder: ' + err.message);
@@ -540,24 +731,26 @@ async function selectFolder() {
 }
 
 async function loadPhotosFromDirectory(dirHandle, skipCacheCheck = false) {
-    showScreen('loading-screen');
-    elements.loadingStatus.textContent = 'Scanning folder...';
-    elements.progressFill.style.width = '0%';
-    
-    // Store directory handle for persistence
-    state.dirHandle = dirHandle;
-    
-    // Check for existing session cache
-    let cachedSession = null;
-    if (!skipCacheCheck) {
-        cachedSession = await loadSessionFromFolder(dirHandle);
-        if (cachedSession) {
-            const resumeSession = confirm(
-                `Found a saved session from ${new Date(cachedSession.timestamp).toLocaleString()}.\n\n` +
-                `Phase: ${cachedSession.currentPhase}\n` +
-                `Selected: ${cachedSession.selectedIds?.length || 0} photos\n` +
-                `Candidates: ${cachedSession.candidates?.length || 0} photos\n\n` +
-                `Resume this session?`
+    try {
+        showScreen('loading-screen');
+        elements.loadingStatus.textContent = 'Scanning folder...';
+        elements.progressFill.style.width = '0%';
+        elements.progressText.textContent = '';
+        
+        // Store directory handle for persistence
+        state.dirHandle = dirHandle;
+        
+        // Check for existing session cache
+        let cachedSession = null;
+        if (!skipCacheCheck) {
+            cachedSession = await loadSessionFromFolder(dirHandle);
+            if (cachedSession) {
+                const resumeSession = confirm(
+                    `Found a saved session from ${new Date(cachedSession.timestamp).toLocaleString()}.\n\n` +
+                    `Phase: ${cachedSession.currentPhase}\n` +
+                    `Selected: ${cachedSession.selectedIds?.length || 0} photos\n` +
+                    `Candidates: ${cachedSession.candidates?.length || 0} photos\n\n` +
+                    `Resume this session?`
             );
             
             if (!resumeSession) {
@@ -573,7 +766,18 @@ async function loadPhotosFromDirectory(dirHandle, skipCacheCheck = false) {
     
     // Recursively collect all image files
     const photoFiles = [];
-    await scanDirectory(dirHandle, photoFiles, '');
+    elements.loadingStatus.textContent = 'Scanning folder...';
+    elements.progressText.textContent = 'Discovering photos...';
+    
+    await scanDirectory(dirHandle, photoFiles, '', (count) => {
+        elements.progressText.textContent = `Found ${count} photos...`;
+    });
+    
+    if (photoFiles.length === 0) {
+        alert('No image files found in the selected folder.');
+        showScreen('landing-screen');
+        return;
+    }
     
     elements.loadingStatus.textContent = `Found ${photoFiles.length} photos. Preparing...`;
     
@@ -640,7 +844,18 @@ async function loadPhotosFromDirectory(dirHandle, skipCacheCheck = false) {
     }
     
     // Save folder handle for browser refresh
-    await saveFolderHandle(dirHandle);
+    await saveFolderHandle(dirHandle, {
+        photoCount: state.allPhotos.length,
+        candidateCount: state.candidates.length,
+        currentPhase: state.currentPhase,
+        comparisonsCompleted: state.comparisonsCompleted,
+        targetCount: state.targetCount
+    });
+    } catch (err) {
+        console.error('Error loading photos:', err);
+        alert('Error loading photos: ' + err.message);
+        showScreen('landing-screen');
+    }
 }
 
 async function restoreSession(cachedSession) {
@@ -715,14 +930,19 @@ async function restoreSession(cachedSession) {
     }
 }
 
-async function scanDirectory(dirHandle, results, currentPath) {
+async function scanDirectory(dirHandle, results, currentPath, statusCallback = null) {
     for await (const entry of dirHandle.values()) {
         const entryPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
         
         if (entry.kind === 'file' && isImageFile(entry.name)) {
             results.push({ handle: entry, path: entryPath });
+            // Update status every 100 files
+            if (statusCallback && results.length % 100 === 0) {
+                statusCallback(results.length);
+                await new Promise(r => setTimeout(r, 0));
+            }
         } else if (entry.kind === 'directory') {
-            await scanDirectory(entry, results, entryPath);
+            await scanDirectory(entry, results, entryPath, statusCallback);
         }
     }
 }
@@ -2538,8 +2758,24 @@ document.addEventListener('keydown', (e) => {
 // Event Listeners
 // ============================================
 
-// Landing
-elements.selectFolderBtn.addEventListener('click', selectFolder);
+// Landing - New Project Modal
+elements.startNewProjectBtn.addEventListener('click', openNewProjectModal);
+elements.newProjectModalClose.addEventListener('click', closeNewProjectModal);
+elements.newProjectModal.addEventListener('click', (e) => {
+    if (e.target === elements.newProjectModal) {
+        closeNewProjectModal();
+    }
+});
+elements.newProjectSelectFolder.addEventListener('click', selectFolderForNewProject);
+elements.newProjectStart.addEventListener('click', startNewProject);
+
+// Toggle options for shuffle
+document.querySelectorAll('.toggle-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.toggle-option').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+    });
+});
 
 // Selection (Phase 1)
 elements.selectionPrev.addEventListener('click', selectionPrevPage);
@@ -2639,51 +2875,144 @@ elements.topRankedModal.addEventListener('click', (e) => {
 });
 
 // ============================================
+// Recent Folders UI
+// ============================================
+
+function getPhaseLabel(phase) {
+    switch (phase) {
+        case 'selection': return 'Selecting candidates';
+        case 'ranking': return 'Ranking in progress';
+        case 'results': return 'Completed';
+        default: return 'Not started';
+    }
+}
+
+function getPhaseColor(phase) {
+    switch (phase) {
+        case 'selection': return '#f59e0b'; // amber
+        case 'ranking': return '#6366f1'; // indigo
+        case 'results': return '#10b981'; // green
+        default: return '#6b7280'; // gray
+    }
+}
+
+function formatRelativeTime(timestamp) {
+    const now = Date.now();
+    const diff = now - timestamp;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+    
+    if (minutes < 1) return 'Just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    if (days < 7) return `${days}d ago`;
+    return new Date(timestamp).toLocaleDateString();
+}
+
+async function renderRecentFolders() {
+    const recentFoldersContainer = document.getElementById('recent-folders');
+    const recentFoldersList = document.getElementById('recent-folders-list');
+    const landingDivider = document.getElementById('landing-divider');
+    
+    const folders = await loadAllFolderHandles();
+    
+    if (folders.length === 0) {
+        recentFoldersContainer.classList.add('hidden');
+        if (landingDivider) landingDivider.classList.add('hidden');
+        return;
+    }
+    
+    recentFoldersContainer.classList.remove('hidden');
+    if (landingDivider) landingDivider.classList.remove('hidden');
+    recentFoldersList.innerHTML = '';
+    
+    for (const folder of folders) {
+        const card = document.createElement('div');
+        card.className = 'recent-folder-card';
+        
+        const phaseColor = getPhaseColor(folder.currentPhase);
+        const progress = folder.currentPhase === 'ranking' && folder.candidateCount > 0
+            ? `${folder.comparisonsCompleted} comparisons`
+            : folder.currentPhase === 'results'
+            ? `${folder.targetCount} A-shots selected`
+            : folder.candidateCount > 0 
+            ? `${folder.candidateCount} candidates picked`
+            : `${folder.photoCount || '?'} photos`;
+        
+        card.innerHTML = `
+            <div class="folder-card-main">
+                <div class="folder-card-icon">📁</div>
+                <div class="folder-card-info">
+                    <div class="folder-card-name">${folder.folderName}</div>
+                    <div class="folder-card-meta">
+                        <span class="folder-card-phase" style="color: ${phaseColor}">${getPhaseLabel(folder.currentPhase)}</span>
+                        <span class="folder-card-sep">•</span>
+                        <span class="folder-card-progress">${progress}</span>
+                        <span class="folder-card-sep">•</span>
+                        <span class="folder-card-time">${formatRelativeTime(folder.lastAccess)}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="folder-card-actions">
+                <button class="folder-resume-btn" title="Resume">▶️ Resume</button>
+                <button class="folder-remove-btn" title="Remove from list">✕</button>
+            </div>
+        `;
+        
+        // Resume button handler
+        card.querySelector('.folder-resume-btn').addEventListener('click', async () => {
+            try {
+                // Check if handle exists
+                if (!folder.handle) {
+                    alert('Folder data is corrupted. Removing from list.');
+                    await clearFolderHandle(folder.folderName);
+                    renderRecentFolders();
+                    return;
+                }
+                
+                // Check permission
+                const permissionStatus = await folder.handle.queryPermission({ mode: 'readwrite' });
+                
+                if (permissionStatus === 'granted') {
+                    await loadPhotosFromDirectory(folder.handle);
+                } else {
+                    // Request permission
+                    const newPermission = await folder.handle.requestPermission({ mode: 'readwrite' });
+                    if (newPermission === 'granted') {
+                        await loadPhotosFromDirectory(folder.handle);
+                    } else {
+                        alert('Permission denied. Please grant access to the folder.');
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to resume folder:', err);
+                alert('Failed to access folder. It may have been moved or deleted.');
+                await clearFolderHandle(folder.folderName);
+                renderRecentFolders();
+            }
+        });
+        
+        // Remove button handler
+        card.querySelector('.folder-remove-btn').addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await clearFolderHandle(folder.folderName);
+            renderRecentFolders();
+        });
+        
+        recentFoldersList.appendChild(card);
+    }
+}
+
+// ============================================
 // Initialize
 // ============================================
 
 async function init() {
     console.log('📸 A-Shot Picker initialized (Swiss-System + Elo Rating)');
     
-    // Try to restore last session from browser storage
-    try {
-        const savedHandle = await loadFolderHandle();
-        if (savedHandle) {
-            // Verify we still have permission
-            const permissionStatus = await savedHandle.queryPermission({ mode: 'readwrite' });
-            
-            if (permissionStatus === 'granted') {
-                // We have permission, automatically load
-                console.log('📁 Found saved folder, restoring session...');
-                await loadPhotosFromDirectory(savedHandle);
-                return;
-            } else if (permissionStatus === 'prompt') {
-                // Need to ask for permission - show a button
-                const resumeBtn = document.createElement('button');
-                resumeBtn.className = 'secondary-btn';
-                resumeBtn.innerHTML = '🔄 Resume Last Session';
-                resumeBtn.style.marginTop = '1rem';
-                resumeBtn.addEventListener('click', async () => {
-                    // Request permission
-                    const newPermission = await savedHandle.requestPermission({ mode: 'readwrite' });
-                    if (newPermission === 'granted') {
-                        await loadPhotosFromDirectory(savedHandle);
-                    } else {
-                        await clearFolderHandle();
-                        resumeBtn.remove();
-                    }
-                });
-                
-                // Add the button after the select folder button
-                elements.selectFolderBtn.parentNode.insertBefore(
-                    resumeBtn, 
-                    elements.selectFolderBtn.nextSibling
-                );
-            }
-        }
-    } catch (err) {
-        console.warn('Failed to restore session:', err);
-    }
+    // Render recent folders on landing page
+    await renderRecentFolders();
 }
 
 // Run initialization
